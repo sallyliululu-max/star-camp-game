@@ -113,13 +113,17 @@
         </div>
 
         <div class="question-card hidden" id="questionCard">
-          <div class="question-tag" id="questionTag">数学思维</div>
+          <div class="question-head">
+            <div class="question-tag" id="questionTag">数学思维</div>
+            <button id="speakButton" class="speak-btn" type="button">再读一遍</button>
+          </div>
           <h3 id="questionPrompt">题目加载中...</h3>
           <div class="answers-grid" id="answersGrid"></div>
           <div class="feedback" id="feedback"></div>
         </div>
 
         <div class="game-actions">
+          <button id="nextButton" class="primary-btn hidden">下一题</button>
           <button id="endButton" class="ghost-btn">结束本局</button>
         </div>
 

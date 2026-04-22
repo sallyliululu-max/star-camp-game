@@ -1,6 +1,8 @@
 const PROGRESS_KEY = "star-camp-progress";
 const SETTINGS_KEY = "star-camp-settings";
+const QUESTION_POOL_KEY = "star-camp-question-pool";
 const QUESTIONS_PER_BATCH = 8;
+const QUESTION_POOL_TARGET = 50;
 const DIFFICULTY_LEVELS = ["easy", "medium", "hard"];
 const DIFFICULTY_LABELS = {
   easy: "简单",
@@ -160,13 +162,18 @@ const state = {
   medals: 0,
   sessionStars: 0,
   answeredCount: 0,
-  currentQuestions: [],
   currentQuestion: null,
+  currentQuestions: [],
   answeringLocked: false,
-  isLoadingMore: false,
   audioContext: null,
   settings: { ...defaultSettings },
-  questionSource: "fallback"
+  questionSource: "fallback",
+  questionPool: {
+    easy: [],
+    medium: [],
+    hard: []
+  },
+  fillPoolPromise: null
 };
 
 const els = {
@@ -200,11 +207,13 @@ const els = {
   loadingCard: document.querySelector("#loadingCard"),
   loadingText: document.querySelector("#loadingText"),
   questionCard: document.querySelector("#questionCard"),
+  speakButton: document.querySelector("#speakButton"),
   questionTag: document.querySelector("#questionTag"),
   questionPrompt: document.querySelector("#questionPrompt"),
   answersGrid: document.querySelector("#answersGrid"),
   feedback: document.querySelector("#feedback"),
   celebration: document.querySelector("#celebration"),
+  nextButton: document.querySelector("#nextButton"),
   endButton: document.querySelector("#endButton"),
   finalStars: document.querySelector("#finalStars"),
   earnedMedals: document.querySelector("#earnedMedals"),
@@ -282,6 +291,34 @@ function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
 }
 
+function normalizePool(raw) {
+  const empty = { easy: [], medium: [], hard: [] };
+  if (!raw || typeof raw !== "object") {
+    return empty;
+  }
+
+  DIFFICULTY_LEVELS.forEach((level) => {
+    const items = Array.isArray(raw[level]) ? raw[level] : [];
+    empty[level] = items.map(sanitizeQuestion).filter(Boolean);
+  });
+  return empty;
+}
+
+function loadQuestionPool() {
+  const raw = localStorage.getItem(QUESTION_POOL_KEY);
+  if (!raw) return;
+
+  try {
+    state.questionPool = normalizePool(JSON.parse(raw));
+  } catch {
+    state.questionPool = { easy: [], medium: [], hard: [] };
+  }
+}
+
+function saveQuestionPool() {
+  localStorage.setItem(QUESTION_POOL_KEY, JSON.stringify(state.questionPool));
+}
+
 function hydrateSettingsForm() {
   els.apiKeyInput.value = state.settings.apiKey;
   els.modelInput.value = state.settings.model;
@@ -302,14 +339,20 @@ function adjustDifficulty(offset) {
   renderDifficulty();
   saveSettings();
   renderSettingsStatus();
+  fillQuestionPoolInBackground();
+}
+
+function getPoolCount(level) {
+  return state.questionPool[level]?.length || 0;
 }
 
 function renderSettingsStatus() {
   const difficultyText = `当前难度：${getDifficultyLabel(state.settings.difficulty)}`;
+  const poolText = `已缓存 ${getPoolCount(state.settings.difficulty)} 题`;
   if (state.settings.apiKey) {
-    setApiStatus(`已设置千问 API key，开局会优先使用 ${state.settings.model} 出题。${difficultyText}`, "success");
+    setApiStatus(`已设置千问 API key，开始时会直接从缓存题库出题。${difficultyText}，${poolText}`, "success");
   } else {
-    setApiStatus(`未设置千问 API key，当前会使用本地题库。${difficultyText}`, "warning");
+    setApiStatus(`未设置千问 API key，当前会使用本地题库。${difficultyText}，${poolText}`, "warning");
   }
 }
 
@@ -358,14 +401,53 @@ function showQuestionCard() {
   els.endButton.disabled = false;
 }
 
-function buildFallbackBatch() {
-  const bank = fallbackQuestionBanks[state.settings.difficulty] || fallbackQuestionBanks.medium;
+function stopSpeaking() {
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+}
+
+function pickChineseVoice() {
+  if (!("speechSynthesis" in window)) {
+    return null;
+  }
+
+  const voices = window.speechSynthesis.getVoices();
+  return voices.find((voice) => /zh|chinese|mandarin/i.test(`${voice.lang} ${voice.name}`)) || null;
+}
+
+function buildQuestionSpeechText(question) {
+  if (!question) return "";
+  const optionsText = question.options
+    .map((option, index) => `选项${index + 1}，${option}`)
+    .join("。");
+  return `${question.type}。${question.prompt}。${optionsText}。`;
+}
+
+function speakQuestion(question) {
+  if (!("speechSynthesis" in window) || !question) {
+    return;
+  }
+
+  stopSpeaking();
+  const utterance = new SpeechSynthesisUtterance(buildQuestionSpeechText(question));
+  utterance.lang = "zh-CN";
+  utterance.rate = 0.95;
+  utterance.pitch = 1.05;
+  const voice = pickChineseVoice();
+  if (voice) {
+    utterance.voice = voice;
+  }
+  window.speechSynthesis.speak(utterance);
+}
+
+function createFallbackBatch(level) {
+  const bank = fallbackQuestionBanks[level] || fallbackQuestionBanks.medium;
   const repeated = [];
   while (repeated.length < QUESTIONS_PER_BATCH) {
     repeated.push(...shuffle(bank));
   }
-  state.questionSource = "fallback";
-  return repeated.slice(0, QUESTIONS_PER_BATCH);
+  return repeated.slice(0, QUESTIONS_PER_BATCH).map((item) => ({ ...item }));
 }
 
 function sanitizeQuestion(item) {
@@ -412,11 +494,11 @@ function getDifficultyPrompt(level) {
   return "难度设为普通：适合大多数小学生，题目有轻挑战但不过难。";
 }
 
-async function generateQuestionsFromQwen() {
+async function generateQuestionsFromQwen(level) {
   const prompt = [
     `请以 JSON 格式返回 ${QUESTIONS_PER_BATCH} 道适合中国 6-12 岁小学生的选择题。`,
     "题目要混合数学思维、语文阅读、英语能力，不要让用户先选学科。",
-    getDifficultyPrompt(state.settings.difficulty),
+    getDifficultyPrompt(level),
     "整套题必须有趣味、像小游戏里的挑战，不要像学校作业或试卷。",
     "优先使用小侦探、动物派对、魔法商店、太空探险、寻宝、校园趣事这类轻剧情场景。",
     "题干要短小、有画面感、带一点俏皮感，但不能幼稚过头。",
@@ -474,42 +556,92 @@ async function generateQuestionsFromQwen() {
     throw new Error("模型返回的合格题目数量不足。");
   }
 
-  state.questionSource = "model";
   return normalized.slice(0, QUESTIONS_PER_BATCH);
 }
 
-async function prepareBatch() {
+async function fetchBatchForLevel(level) {
   if (!state.settings.apiKey) {
-    return buildFallbackBatch();
+    state.questionSource = "fallback";
+    return createFallbackBatch(level);
   }
 
   try {
-    const generated = await generateQuestionsFromQwen();
-    setApiStatus(`本轮题目由 ${state.settings.model} 生成。当前难度：${getDifficultyLabel(state.settings.difficulty)}`, "success");
+    const generated = await generateQuestionsFromQwen(level);
+    state.questionSource = "model";
     return generated;
   } catch (error) {
     console.error(error);
-    setApiStatus(`千问出题失败，已自动切回本地题库。当前难度：${getDifficultyLabel(state.settings.difficulty)}`, "error");
-    return buildFallbackBatch();
+    state.questionSource = "fallback";
+    setApiStatus(`千问补题失败，已自动切回本地题库。当前难度：${getDifficultyLabel(level)}`, "error");
+    return createFallbackBatch(level);
   }
 }
 
-async function ensureQuestionQueue(minCount = 1) {
-  if (state.currentQuestions.length >= minCount || state.isLoadingMore) {
-    return;
+function takeQuestionFromPool(level) {
+  const pool = state.questionPool[level] || [];
+  const question = pool.shift() || null;
+  saveQuestionPool();
+  renderSettingsStatus();
+  return question;
+}
+
+function pushQuestionsToPool(level, questions) {
+  state.questionPool[level].push(...questions);
+  state.questionPool[level] = state.questionPool[level].slice(0, QUESTION_POOL_TARGET);
+  saveQuestionPool();
+  renderSettingsStatus();
+}
+
+async function fillQuestionPoolInBackground(force = false) {
+  if (state.fillPoolPromise && !force) {
+    return state.fillPoolPromise;
   }
 
-  state.isLoadingMore = true;
-  const nextBatch = await prepareBatch();
-  state.currentQuestions.push(...nextBatch);
-  state.isLoadingMore = false;
+  state.fillPoolPromise = (async () => {
+    const level = state.settings.difficulty;
+    while (getPoolCount(level) < QUESTION_POOL_TARGET) {
+      const batch = await fetchBatchForLevel(level);
+      pushQuestionsToPool(level, batch);
+      if (!state.settings.apiKey) {
+        break;
+      }
+    }
+  })().finally(() => {
+    state.fillPoolPromise = null;
+  });
+
+  return state.fillPoolPromise;
+}
+
+async function ensureSessionQuestions(minCount = 1) {
+  const level = state.settings.difficulty;
+
+  while (state.currentQuestions.length < minCount) {
+    const fromPool = takeQuestionFromPool(level);
+    if (fromPool) {
+      state.currentQuestions.push(fromPool);
+      continue;
+    }
+
+    const batch = await fetchBatchForLevel(level);
+    if (!batch.length) {
+      break;
+    }
+
+    state.currentQuestions.push(batch[0]);
+    if (batch.length > 1) {
+      pushQuestionsToPool(level, batch.slice(1));
+    }
+  }
+
+  fillQuestionPoolInBackground();
 }
 
 function renderQuestion() {
   const nextQuestion = state.currentQuestions.shift();
   if (!nextQuestion) {
-    showLoading("正在准备更多题目...");
-    ensureQuestionQueue(1).then(() => {
+    showLoading("正在准备题目...");
+    ensureSessionQuestions(1).then(() => {
       renderQuestion();
     });
     return;
@@ -522,6 +654,7 @@ function renderQuestion() {
   els.feedback.textContent = "";
   els.feedback.className = "feedback";
   els.celebration.classList.add("hidden");
+  els.nextButton.classList.add("hidden");
 
   const options = shuffle(state.currentQuestion.options);
   els.answersGrid.innerHTML = "";
@@ -536,9 +669,10 @@ function renderQuestion() {
 
   renderStats();
   showQuestionCard();
+  speakQuestion(state.currentQuestion);
 
-  if (state.currentQuestions.length <= 2) {
-    ensureQuestionQueue(4);
+  if (state.currentQuestions.length <= 3) {
+    ensureSessionQuestions(6);
   }
 }
 
@@ -600,9 +734,10 @@ function lockAnswers(correctAnswer, clickedButton, isCorrect) {
 }
 
 async function moveToNextQuestion() {
+  stopSpeaking();
+  state.currentQuestion = null;
   if (state.currentQuestions.length === 0) {
-    showLoading("正在准备更多题目...");
-    await ensureQuestionQueue(1);
+    await ensureSessionQuestions(1);
   }
   renderQuestion();
 }
@@ -630,9 +765,8 @@ function handleAnswer(selected, button) {
     renderStats();
   }
 
-  window.setTimeout(() => {
-    moveToNextQuestion();
-  }, isCorrect ? 1150 : 1450);
+  els.nextButton.classList.remove("hidden");
+  fillQuestionPoolInBackground();
 }
 
 async function startRound() {
@@ -641,17 +775,22 @@ async function startRound() {
   state.currentQuestions = [];
   state.currentQuestion = null;
   state.answeringLocked = false;
-  state.questionSource = "fallback";
   renderStats();
   renderDifficulty();
   switchScreen(els.gameScreen);
-  showLoading(state.settings.apiKey ? "正在让千问准备新题目..." : "正在准备本地题目...");
 
-  await ensureQuestionQueue(1);
+  if (getPoolCount(state.settings.difficulty) === 0) {
+    showLoading("第一次准备题库，请稍等...");
+    await ensureSessionQuestions(1);
+  } else {
+    ensureSessionQuestions(6);
+  }
+
   renderQuestion();
 }
 
 function finishRound() {
+  stopSpeaking();
   const previousMedals = state.medals;
   state.totalStars += state.sessionStars;
   state.medals = Math.floor(state.totalStars / 20);
@@ -665,15 +804,18 @@ function finishRound() {
   els.finalStars.textContent = state.sessionStars;
   els.earnedMedals.textContent = newMedals > 0 ? newMedals : 0;
 
-  const sourceLabel = state.questionSource === "model" ? "这局题目主要由千问生成。" : "这局题目来自本地题库。";
+  const sourceLabel = state.settings.apiKey ? "题目优先来自后台缓存的千问题库。" : "这局题目来自本地题库。";
   els.summaryCopy.textContent = newMedals > 0
     ? `${sourceLabel} 你一共答了 ${state.answeredCount} 题，新获得了 ${newMedals} 枚奖牌，快回主页看看奖牌展柜吧。`
     : `${sourceLabel} 你一共答了 ${state.answeredCount} 题，收获 ${state.sessionStars} 颗星，再攒一攒就能解锁新的奖牌。`;
 
+  els.loadingCard.classList.add("hidden");
+  els.questionCard.classList.add("hidden");
   switchScreen(els.summaryScreen);
 }
 
 function resetProgress() {
+  stopSpeaking();
   state.totalStars = 0;
   state.medals = 0;
   state.sessionStars = 0;
@@ -687,6 +829,7 @@ function resetProgress() {
 }
 
 function openSettings() {
+  stopSpeaking();
   hydrateSettingsForm();
   setSettingsMessage("");
   renderDifficulty();
@@ -694,6 +837,7 @@ function openSettings() {
 }
 
 function saveSettingsFromForm() {
+  const oldDifficulty = state.settings.difficulty;
   state.settings.apiKey = els.apiKeyInput.value.trim();
   state.settings.model = els.modelInput.value.trim() || defaultSettings.model;
   state.settings.endpoint = els.endpointInput.value.trim() || defaultSettings.endpoint;
@@ -701,6 +845,12 @@ function saveSettingsFromForm() {
   renderDifficulty();
   renderSettingsStatus();
   setSettingsMessage("设置已保存。", "success");
+
+  if (oldDifficulty !== state.settings.difficulty) {
+    fillQuestionPoolInBackground(true);
+  } else {
+    fillQuestionPoolInBackground();
+  }
 }
 
 function clearSettings() {
@@ -710,11 +860,17 @@ function clearSettings() {
   renderDifficulty();
   renderSettingsStatus();
   setSettingsMessage("API key 已清空，之后会使用本地题库。", "success");
+  fillQuestionPoolInBackground(true);
 }
 
 els.startButton.addEventListener("click", startRound);
 els.playAgainButton.addEventListener("click", startRound);
-els.backHomeButton.addEventListener("click", () => switchScreen(els.homeScreen));
+els.backHomeButton.addEventListener("click", () => {
+  stopSpeaking();
+  switchScreen(els.homeScreen);
+});
+els.speakButton.addEventListener("click", () => speakQuestion(state.currentQuestion));
+els.nextButton.addEventListener("click", moveToNextQuestion);
 els.endButton.addEventListener("click", finishRound);
 els.resetButton.addEventListener("click", resetProgress);
 els.settingsButton.addEventListener("click", openSettings);
@@ -728,8 +884,10 @@ els.settingsDifficultyUpButton.addEventListener("click", () => adjustDifficulty(
 
 loadProgress();
 loadSettings();
+loadQuestionPool();
 hydrateSettingsForm();
 renderDifficulty();
 renderStats();
 renderMedals();
 renderSettingsStatus();
+fillQuestionPoolInBackground();

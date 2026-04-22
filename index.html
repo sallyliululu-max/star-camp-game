@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>星星脑力营</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero-card">
+      <div>
+        <p class="eyebrow">每天来一局，轻松练脑力</p>
+        <h1>星星脑力营</h1>
+        <p class="hero-copy">点开始就出题，题目优先由千问生成。答对拿星星，攒够 20 颗星解锁一枚闪亮奖牌。</p>
+      </div>
+      <div class="stats-row">
+        <div class="stat-pill">
+          <span>总星星</span>
+          <strong id="totalStars">0</strong>
+        </div>
+        <div class="stat-pill">
+          <span>奖牌</span>
+          <strong id="totalMedals">0</strong>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel" id="homeScreen">
+        <div class="panel-head">
+          <h2>奖牌展柜</h2>
+          <p>每 20 颗星换 1 枚奖牌，努力把展柜摆满。</p>
+        </div>
+
+        <div class="info-strip">
+          <span id="apiStatus" class="status-chip warning">未设置千问 API key，当前会使用本地题库</span>
+        </div>
+
+        <div class="difficulty-strip">
+          <span class="difficulty-label">题目难度</span>
+          <div class="difficulty-control">
+            <button id="difficultyDownButton" class="difficulty-btn" type="button">-</button>
+            <span id="difficultyValue" class="difficulty-value">普通</span>
+            <button id="difficultyUpButton" class="difficulty-btn" type="button">+</button>
+          </div>
+        </div>
+
+        <div class="medal-shelf" id="medalShelf"></div>
+
+        <div class="action-row">
+          <button id="startButton" class="primary-btn">开始答题</button>
+          <button id="settingsButton" class="ghost-btn">设置</button>
+          <button id="resetButton" class="ghost-btn">重置进度</button>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="settingsScreen">
+        <div class="panel-head">
+          <h2>题目设置</h2>
+          <p>在这里输入千问 API key。保存后，开始答题时会优先实时生成题目。</p>
+        </div>
+
+        <div class="settings-form">
+          <label class="field">
+            <span>API key</span>
+            <input id="apiKeyInput" type="password" placeholder="请输入阿里千问 API key">
+          </label>
+
+          <label class="field">
+            <span>模型</span>
+            <input id="modelInput" type="text" value="qwen-plus" placeholder="例如 qwen-plus">
+          </label>
+
+          <label class="field">
+            <span>接口地址</span>
+            <input id="endpointInput" type="text" value="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions">
+          </label>
+
+          <div class="field">
+            <span>题目难度</span>
+            <div class="difficulty-control settings-difficulty">
+              <button id="settingsDifficultyDownButton" class="difficulty-btn" type="button">-</button>
+              <span id="settingsDifficultyValue" class="difficulty-value">普通</span>
+              <button id="settingsDifficultyUpButton" class="difficulty-btn" type="button">+</button>
+            </div>
+          </div>
+
+          <div class="settings-note">
+            说明：这里的 key 只保存在当前浏览器本地。点击“开始答题”时会直接从浏览器请求千问接口。
+          </div>
+
+          <div class="action-row">
+            <button id="saveSettingsButton" class="primary-btn">保存设置</button>
+            <button id="clearSettingsButton" class="ghost-btn">清空 key</button>
+            <button id="backFromSettingsButton" class="ghost-btn">返回主页</button>
+          </div>
+
+          <div id="settingsMessage" class="settings-message"></div>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="gameScreen">
+        <div class="game-topbar">
+          <div class="mini-stat">已答 <span id="questionIndex">0</span> 题</div>
+          <div class="mini-stat">本局星星 <span id="sessionStars">0</span></div>
+          <div class="mini-stat">难度 <span id="gameDifficulty">普通</span></div>
+        </div>
+
+        <div class="loading-card hidden" id="loadingCard">
+          <div class="spinner"></div>
+          <p id="loadingText">正在准备题目...</p>
+        </div>
+
+        <div class="question-card hidden" id="questionCard">
+          <div class="question-tag" id="questionTag">数学思维</div>
+          <h3 id="questionPrompt">题目加载中...</h3>
+          <div class="answers-grid" id="answersGrid"></div>
+          <div class="feedback" id="feedback"></div>
+        </div>
+
+        <div class="game-actions">
+          <button id="endButton" class="ghost-btn">结束本局</button>
+        </div>
+
+        <div class="celebration hidden" id="celebration">
+          <div class="burst burst-a"></div>
+          <div class="burst burst-b"></div>
+          <div class="burst burst-c"></div>
+          <div class="celebration-text">太棒啦 +1 星</div>
+          <div class="star-trail">
+            <span class="fly-star star-1">★</span>
+            <span class="fly-star star-2">★</span>
+            <span class="fly-star star-3">★</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="summaryScreen">
+        <div class="panel-head">
+          <h2>本局结算</h2>
+          <p>看看这局收获了多少星星和奖牌。</p>
+        </div>
+
+        <div class="summary-card">
+          <div class="summary-value">
+            <span>本局星星</span>
+            <strong id="finalStars">0</strong>
+          </div>
+          <div class="summary-value">
+            <span>新奖牌</span>
+            <strong id="earnedMedals">0</strong>
+          </div>
+        </div>
+
+        <div class="summary-copy" id="summaryCopy"></div>
+
+        <div class="action-row">
+          <button id="playAgainButton" class="primary-btn">再玩一局</button>
+          <button id="backHomeButton" class="ghost-btn">返回主页</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

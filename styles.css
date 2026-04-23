@@ -90,11 +90,12 @@ h1 {
   display: flex;
   gap: 14px;
   align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .stat-pill,
 .mini-stat {
-  min-width: 110px;
+  min-width: 96px;
   padding: 14px 18px;
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.7);
@@ -606,6 +607,18 @@ main {
 
   .stats-row {
     width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .stat-pill {
+    min-width: 0;
+    padding: 12px 10px;
+  }
+
+  .stat-pill strong {
+    font-size: 1.5rem;
   }
 
   .answers-grid,

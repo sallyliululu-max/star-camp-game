@@ -1,8 +1,11 @@
 const PROGRESS_KEY = "star-camp-progress";
 const SETTINGS_KEY = "star-camp-settings";
 const QUESTION_POOL_KEY = "star-camp-question-pool";
+const USED_QUESTION_KEYS = "star-camp-used-question-keys";
 const QUESTIONS_PER_BATCH = 8;
 const QUESTION_POOL_TARGET = 50;
+const MIN_GRADE = 1;
+const MAX_GRADE = 6;
 const DIFFICULTY_LEVELS = ["easy", "medium", "hard"];
 const DIFFICULTY_LABELS = {
   easy: "简单",
@@ -154,12 +157,14 @@ const defaultSettings = {
   apiKey: "",
   model: "qwen-plus",
   endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-  difficulty: "medium"
+  difficulty: "medium",
+  grade: 3
 };
 
 const state = {
   totalStars: 0,
   medals: 0,
+  trophies: 0,
   sessionStars: 0,
   answeredCount: 0,
   currentQuestion: null,
@@ -173,20 +178,23 @@ const state = {
     medium: [],
     hard: []
   },
-  fillPoolPromise: null
+  fillPoolPromise: null,
+  usedQuestionKeys: new Set(),
+  usedQuestionArchive: new Set()
 };
 
 const els = {
   totalStars: document.querySelector("#totalStars"),
   totalMedals: document.querySelector("#totalMedals"),
+  totalTrophies: document.querySelector("#totalTrophies"),
   medalShelf: document.querySelector("#medalShelf"),
   apiStatus: document.querySelector("#apiStatus"),
-  difficultyValue: document.querySelector("#difficultyValue"),
-  difficultyDownButton: document.querySelector("#difficultyDownButton"),
-  difficultyUpButton: document.querySelector("#difficultyUpButton"),
   settingsDifficultyValue: document.querySelector("#settingsDifficultyValue"),
   settingsDifficultyDownButton: document.querySelector("#settingsDifficultyDownButton"),
   settingsDifficultyUpButton: document.querySelector("#settingsDifficultyUpButton"),
+  gradeValue: document.querySelector("#gradeValue"),
+  gradeDownButton: document.querySelector("#gradeDownButton"),
+  gradeUpButton: document.querySelector("#gradeUpButton"),
   gameDifficulty: document.querySelector("#gameDifficulty"),
   homeScreen: document.querySelector("#homeScreen"),
   settingsScreen: document.querySelector("#settingsScreen"),
@@ -235,6 +243,14 @@ function getDifficultyLabel(level) {
   return DIFFICULTY_LABELS[level] || DIFFICULTY_LABELS.medium;
 }
 
+function getGradeLabel(grade) {
+  return `${grade}年级`;
+}
+
+function getQuestionKey(question) {
+  return `${question.type}__${question.prompt}__${question.answer}`;
+}
+
 function setSettingsMessage(text, type = "") {
   els.settingsMessage.textContent = text;
   els.settingsMessage.className = `settings-message ${type}`.trim();
@@ -253,9 +269,11 @@ function loadProgress() {
     const data = JSON.parse(raw);
     state.totalStars = Number(data.totalStars) || 0;
     state.medals = Number(data.medals) || 0;
+    state.trophies = Number(data.trophies) || Math.floor(state.medals / 4);
   } catch {
     state.totalStars = 0;
     state.medals = 0;
+    state.trophies = 0;
   }
 }
 
@@ -264,7 +282,8 @@ function saveProgress() {
     PROGRESS_KEY,
     JSON.stringify({
       totalStars: state.totalStars,
-      medals: state.medals
+      medals: state.medals,
+      trophies: state.trophies
     })
   );
 }
@@ -276,11 +295,13 @@ function loadSettings() {
   try {
     const parsed = JSON.parse(raw);
     const difficulty = DIFFICULTY_LEVELS.includes(parsed.difficulty) ? parsed.difficulty : defaultSettings.difficulty;
+    const grade = Number(parsed.grade);
     state.settings = {
       apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : "",
       model: typeof parsed.model === "string" && parsed.model.trim() ? parsed.model.trim() : defaultSettings.model,
       endpoint: typeof parsed.endpoint === "string" && parsed.endpoint.trim() ? parsed.endpoint.trim() : defaultSettings.endpoint,
-      difficulty
+      difficulty,
+      grade: Number.isInteger(grade) ? Math.min(MAX_GRADE, Math.max(MIN_GRADE, grade)) : defaultSettings.grade
     };
   } catch {
     state.settings = { ...defaultSettings };
@@ -319,6 +340,32 @@ function saveQuestionPool() {
   localStorage.setItem(QUESTION_POOL_KEY, JSON.stringify(state.questionPool));
 }
 
+function loadUsedQuestionArchive() {
+  const raw = localStorage.getItem(USED_QUESTION_KEYS);
+  if (!raw) return;
+
+  try {
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed) ? parsed : [];
+    state.usedQuestionArchive = new Set(items.map((item) => String(item)));
+  } catch {
+    state.usedQuestionArchive = new Set();
+  }
+}
+
+function saveUsedQuestionArchive() {
+  localStorage.setItem(USED_QUESTION_KEYS, JSON.stringify([...state.usedQuestionArchive]));
+}
+
+function resetQuestionPool() {
+  state.questionPool = {
+    easy: [],
+    medium: [],
+    hard: []
+  };
+  saveQuestionPool();
+}
+
 function hydrateSettingsForm() {
   els.apiKeyInput.value = state.settings.apiKey;
   els.modelInput.value = state.settings.model;
@@ -327,9 +374,9 @@ function hydrateSettingsForm() {
 
 function renderDifficulty() {
   const label = getDifficultyLabel(state.settings.difficulty);
-  els.difficultyValue.textContent = label;
   els.settingsDifficultyValue.textContent = label;
   els.gameDifficulty.textContent = label;
+  els.gradeValue.textContent = getGradeLabel(state.settings.grade);
 }
 
 function adjustDifficulty(offset) {
@@ -342,17 +389,27 @@ function adjustDifficulty(offset) {
   fillQuestionPoolInBackground();
 }
 
+function adjustGrade(offset) {
+  state.settings.grade = Math.min(MAX_GRADE, Math.max(MIN_GRADE, state.settings.grade + offset));
+  resetQuestionPool();
+  renderDifficulty();
+  saveSettings();
+  renderSettingsStatus();
+  fillQuestionPoolInBackground(true);
+}
+
 function getPoolCount(level) {
   return state.questionPool[level]?.length || 0;
 }
 
 function renderSettingsStatus() {
   const difficultyText = `当前难度：${getDifficultyLabel(state.settings.difficulty)}`;
+  const gradeText = `目标：${getGradeLabel(state.settings.grade)}`;
   const poolText = `已缓存 ${getPoolCount(state.settings.difficulty)} 题`;
   if (state.settings.apiKey) {
-    setApiStatus(`已设置千问 API key，开始时会直接从缓存题库出题。${difficultyText}，${poolText}`, "success");
+    setApiStatus(`已设置千问 API key，开始时会直接从缓存题库出题。${difficultyText}，${gradeText}，${poolText}`, "success");
   } else {
-    setApiStatus(`未设置千问 API key，当前会使用本地题库。${difficultyText}，${poolText}`, "warning");
+    setApiStatus(`未设置千问 API key，当前会使用本地题库。${difficultyText}，${gradeText}，${poolText}`, "warning");
   }
 }
 
@@ -366,26 +423,38 @@ function switchScreen(target) {
 function renderStats() {
   els.totalStars.textContent = state.totalStars;
   els.totalMedals.textContent = state.medals;
+  els.totalTrophies.textContent = state.trophies;
   els.sessionStars.textContent = state.sessionStars;
   els.questionIndex.textContent = state.answeredCount;
 }
 
 function renderMedals() {
-  const showSlots = Math.max(state.medals + 2, 4);
-  const medalsHtml = Array.from({ length: showSlots }, (_, index) => {
-    const unlocked = index < state.medals;
+  const currentMedals = state.medals % 4;
+  const trophyCards = Array.from({ length: Math.max(state.trophies + 1, 1) }, (_, index) => {
+    const unlocked = index < state.trophies;
+    return `
+      <article class="medal-slot ${unlocked ? "" : "locked"}">
+        <div class="medal-icon">${unlocked ? "🏆" : "☆"}</div>
+        <div class="medal-name">${unlocked ? `奖杯 ${index + 1}` : "下一座奖杯"}</div>
+        <div class="medal-desc">${unlocked ? "4 枚奖牌已兑换" : "再集满 4 枚奖牌解锁"}</div>
+      </article>
+    `;
+  });
+
+  const medalCards = Array.from({ length: 4 }, (_, index) => {
+    const unlocked = index < currentMedals;
     const medalNumber = index + 1;
     const label = medalNames[index % medalNames.length];
     return `
       <article class="medal-slot ${unlocked ? "" : "locked"}">
         <div class="medal-icon">${unlocked ? "🏅" : "☆"}</div>
         <div class="medal-name">${label}</div>
-        <div class="medal-desc">${unlocked ? `第 ${medalNumber} 枚奖牌` : "继续攒星星解锁"}</div>
+        <div class="medal-desc">${unlocked ? `本轮第 ${medalNumber} 枚奖牌` : "继续攒星星解锁"}</div>
       </article>
     `;
-  }).join("");
+  });
 
-  els.medalShelf.innerHTML = medalsHtml;
+  els.medalShelf.innerHTML = [...medalCards, ...trophyCards].join("");
 }
 
 function showLoading(text) {
@@ -430,6 +499,7 @@ function speakQuestion(question) {
   }
 
   stopSpeaking();
+  window.speechSynthesis.resume();
   const utterance = new SpeechSynthesisUtterance(buildQuestionSpeechText(question));
   utterance.lang = "zh-CN";
   utterance.rate = 0.95;
@@ -447,7 +517,9 @@ function createFallbackBatch(level) {
   while (repeated.length < QUESTIONS_PER_BATCH) {
     repeated.push(...shuffle(bank));
   }
-  return repeated.slice(0, QUESTIONS_PER_BATCH).map((item) => ({ ...item }));
+  const filtered = dedupeQuestions(repeated.map((item) => ({ ...item })))
+    .filter((question) => !state.usedQuestionArchive.has(getQuestionKey(question)));
+  return filtered.slice(0, QUESTIONS_PER_BATCH);
 }
 
 function sanitizeQuestion(item) {
@@ -466,6 +538,18 @@ function sanitizeQuestion(item) {
   }
 
   return { type, prompt, options, answer, explanation };
+}
+
+function dedupeQuestions(questions) {
+  const seen = new Set();
+  return questions.filter((question) => {
+    const key = getQuestionKey(question);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function extractJson(text) {
@@ -494,11 +578,29 @@ function getDifficultyPrompt(level) {
   return "难度设为普通：适合大多数小学生，题目有轻挑战但不过难。";
 }
 
+function getEnglishVocabPrompt(grade) {
+  const map = {
+    1: "英语词汇必须严格限制在一年级常见入门词，如颜色、数字、家庭成员、基础动物、简单问候。",
+    2: "英语词汇必须严格限制在二年级常见高频词，如日常物品、基础食物、简单动作、简单问候。",
+    3: "英语词汇必须严格限制在三年级常见校园和生活词汇，不要出现抽象词和复杂语法。",
+    4: "英语词汇必须严格限制在四年级常见高频词，不要出现低频词、复杂时态和抽象表达。",
+    5: "英语词汇必须严格限制在五年级常见教材词汇，不要出现明显超纲词。",
+    6: "英语词汇可以使用六年级常见教材词汇，但不要超过小学毕业水平。"
+  };
+  return map[grade] || map[3];
+}
+
+function getGradePrompt(grade) {
+  return `目标学生为小学${grade}年级。英语词汇绝不能超过这个年级的常见教材范围；数学思维和语文阅读按这个年级的较高要求来设计，但仍要让孩子能通过思考完成。`;
+}
+
 async function generateQuestionsFromQwen(level) {
   const prompt = [
     `请以 JSON 格式返回 ${QUESTIONS_PER_BATCH} 道适合中国 6-12 岁小学生的选择题。`,
     "题目要混合数学思维、语文阅读、英语能力，不要让用户先选学科。",
     getDifficultyPrompt(level),
+    getGradePrompt(state.settings.grade),
+    getEnglishVocabPrompt(state.settings.grade),
     "整套题必须有趣味、像小游戏里的挑战，不要像学校作业或试卷。",
     "优先使用小侦探、动物派对、魔法商店、太空探险、寻宝、校园趣事这类轻剧情场景。",
     "题干要短小、有画面感、带一点俏皮感，但不能幼稚过头。",
@@ -551,12 +653,13 @@ async function generateQuestionsFromQwen(level) {
   const parsed = JSON.parse(extractJson(content));
   const list = Array.isArray(parsed.questions) ? parsed.questions : [];
   const normalized = list.map(sanitizeQuestion).filter(Boolean);
+  const deduped = dedupeQuestions(normalized);
 
-  if (normalized.length < QUESTIONS_PER_BATCH) {
+  if (deduped.length < QUESTIONS_PER_BATCH) {
     throw new Error("模型返回的合格题目数量不足。");
   }
 
-  return normalized.slice(0, QUESTIONS_PER_BATCH);
+  return deduped.slice(0, QUESTIONS_PER_BATCH);
 }
 
 async function fetchBatchForLevel(level) {
@@ -586,8 +689,17 @@ function takeQuestionFromPool(level) {
 }
 
 function pushQuestionsToPool(level, questions) {
-  state.questionPool[level].push(...questions);
-  state.questionPool[level] = state.questionPool[level].slice(0, QUESTION_POOL_TARGET);
+  const existing = new Set((state.questionPool[level] || []).map(getQuestionKey));
+  const filtered = questions.filter((question) => {
+    const key = getQuestionKey(question);
+    if (existing.has(key) || state.usedQuestionArchive.has(key)) {
+      return false;
+    }
+    existing.add(key);
+    return true;
+  });
+  state.questionPool[level].push(...filtered);
+  state.questionPool[level] = state.questionPool[level].slice(-QUESTION_POOL_TARGET);
   saveQuestionPool();
   renderSettingsStatus();
 }
@@ -619,6 +731,9 @@ async function ensureSessionQuestions(minCount = 1) {
   while (state.currentQuestions.length < minCount) {
     const fromPool = takeQuestionFromPool(level);
     if (fromPool) {
+      if (state.usedQuestionKeys.has(getQuestionKey(fromPool)) || state.usedQuestionArchive.has(getQuestionKey(fromPool))) {
+        continue;
+      }
       state.currentQuestions.push(fromPool);
       continue;
     }
@@ -628,9 +743,17 @@ async function ensureSessionQuestions(minCount = 1) {
       break;
     }
 
-    state.currentQuestions.push(batch[0]);
-    if (batch.length > 1) {
-      pushQuestionsToPool(level, batch.slice(1));
+    const freshBatch = batch.filter((question) => {
+      const key = getQuestionKey(question);
+      return !state.usedQuestionKeys.has(key) && !state.usedQuestionArchive.has(key);
+    });
+    if (!freshBatch.length) {
+      break;
+    }
+
+    state.currentQuestions.push(freshBatch[0]);
+    if (freshBatch.length > 1) {
+      pushQuestionsToPool(level, freshBatch.slice(1));
     }
   }
 
@@ -648,6 +771,9 @@ function renderQuestion() {
   }
 
   state.currentQuestion = nextQuestion;
+  state.usedQuestionKeys.add(getQuestionKey(nextQuestion));
+  state.usedQuestionArchive.add(getQuestionKey(nextQuestion));
+  saveUsedQuestionArchive();
   state.answeringLocked = false;
   els.questionTag.textContent = state.currentQuestion.type;
   els.questionPrompt.textContent = state.currentQuestion.prompt;
@@ -657,6 +783,7 @@ function renderQuestion() {
   els.nextButton.classList.add("hidden");
 
   const options = shuffle(state.currentQuestion.options);
+  state.currentQuestion.options = options;
   els.answersGrid.innerHTML = "";
 
   options.forEach((option) => {
@@ -669,7 +796,7 @@ function renderQuestion() {
 
   renderStats();
   showQuestionCard();
-  speakQuestion(state.currentQuestion);
+  window.setTimeout(() => speakQuestion(state.currentQuestion), 120);
 
   if (state.currentQuestions.length <= 3) {
     ensureSessionQuestions(6);
@@ -775,6 +902,7 @@ async function startRound() {
   state.currentQuestions = [];
   state.currentQuestion = null;
   state.answeringLocked = false;
+  state.usedQuestionKeys = new Set();
   renderStats();
   renderDifficulty();
   switchScreen(els.gameScreen);
@@ -791,10 +919,10 @@ async function startRound() {
 
 function finishRound() {
   stopSpeaking();
-  const previousMedals = state.medals;
   state.totalStars += state.sessionStars;
   state.medals = Math.floor(state.totalStars / 20);
-  const newMedals = state.medals - previousMedals;
+  state.trophies = Math.floor(state.medals / 4);
+  const currentMedals = state.medals % 4;
 
   saveProgress();
   renderStats();
@@ -802,12 +930,10 @@ function finishRound() {
   renderSettingsStatus();
 
   els.finalStars.textContent = state.sessionStars;
-  els.earnedMedals.textContent = newMedals > 0 ? newMedals : 0;
+  els.earnedMedals.textContent = state.medals;
 
   const sourceLabel = state.settings.apiKey ? "题目优先来自后台缓存的千问题库。" : "这局题目来自本地题库。";
-  els.summaryCopy.textContent = newMedals > 0
-    ? `${sourceLabel} 你一共答了 ${state.answeredCount} 题，新获得了 ${newMedals} 枚奖牌，快回主页看看奖牌展柜吧。`
-    : `${sourceLabel} 你一共答了 ${state.answeredCount} 题，收获 ${state.sessionStars} 颗星，再攒一攒就能解锁新的奖牌。`;
+  els.summaryCopy.textContent = `${sourceLabel} 你一共答了 ${state.answeredCount} 题，收获 ${state.sessionStars} 颗星。当前已点亮 ${currentMedals} 枚奖牌，累计奖杯 ${state.trophies} 座。`;
 
   els.loadingCard.classList.add("hidden");
   els.questionCard.classList.add("hidden");
@@ -818,11 +944,14 @@ function resetProgress() {
   stopSpeaking();
   state.totalStars = 0;
   state.medals = 0;
+  state.trophies = 0;
   state.sessionStars = 0;
   state.answeredCount = 0;
   state.currentQuestions = [];
   state.currentQuestion = null;
   localStorage.removeItem(PROGRESS_KEY);
+  localStorage.removeItem(USED_QUESTION_KEYS);
+  state.usedQuestionArchive = new Set();
   renderStats();
   renderMedals();
   switchScreen(els.homeScreen);
@@ -838,6 +967,7 @@ function openSettings() {
 
 function saveSettingsFromForm() {
   const oldDifficulty = state.settings.difficulty;
+  const oldGrade = state.settings.grade;
   state.settings.apiKey = els.apiKeyInput.value.trim();
   state.settings.model = els.modelInput.value.trim() || defaultSettings.model;
   state.settings.endpoint = els.endpointInput.value.trim() || defaultSettings.endpoint;
@@ -846,7 +976,10 @@ function saveSettingsFromForm() {
   renderSettingsStatus();
   setSettingsMessage("设置已保存。", "success");
 
-  if (oldDifficulty !== state.settings.difficulty) {
+  if (oldDifficulty !== state.settings.difficulty || oldGrade !== state.settings.grade) {
+    if (oldGrade !== state.settings.grade) {
+      resetQuestionPool();
+    }
     fillQuestionPoolInBackground(true);
   } else {
     fillQuestionPoolInBackground();
@@ -877,14 +1010,15 @@ els.settingsButton.addEventListener("click", openSettings);
 els.saveSettingsButton.addEventListener("click", saveSettingsFromForm);
 els.clearSettingsButton.addEventListener("click", clearSettings);
 els.backFromSettingsButton.addEventListener("click", () => switchScreen(els.homeScreen));
-els.difficultyDownButton.addEventListener("click", () => adjustDifficulty(-1));
-els.difficultyUpButton.addEventListener("click", () => adjustDifficulty(1));
 els.settingsDifficultyDownButton.addEventListener("click", () => adjustDifficulty(-1));
 els.settingsDifficultyUpButton.addEventListener("click", () => adjustDifficulty(1));
+els.gradeDownButton.addEventListener("click", () => adjustGrade(-1));
+els.gradeUpButton.addEventListener("click", () => adjustGrade(1));
 
 loadProgress();
 loadSettings();
 loadQuestionPool();
+loadUsedQuestionArchive();
 hydrateSettingsForm();
 renderDifficulty();
 renderStats();

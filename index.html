@@ -23,6 +23,10 @@
           <span>奖牌</span>
           <strong id="totalMedals">0</strong>
         </div>
+        <div class="stat-pill">
+          <span>奖杯</span>
+          <strong id="totalTrophies">0</strong>
+        </div>
       </div>
     </header>
 
@@ -30,20 +34,7 @@
       <section class="panel" id="homeScreen">
         <div class="panel-head">
           <h2>奖牌展柜</h2>
-          <p>每 20 颗星换 1 枚奖牌，努力把展柜摆满。</p>
-        </div>
-
-        <div class="info-strip">
-          <span id="apiStatus" class="status-chip warning">未设置千问 API key，当前会使用本地题库</span>
-        </div>
-
-        <div class="difficulty-strip">
-          <span class="difficulty-label">题目难度</span>
-          <div class="difficulty-control">
-            <button id="difficultyDownButton" class="difficulty-btn" type="button">-</button>
-            <span id="difficultyValue" class="difficulty-value">普通</span>
-            <button id="difficultyUpButton" class="difficulty-btn" type="button">+</button>
-          </div>
+          <p>每 20 颗星换 1 枚奖牌，每集满 4 枚奖牌就能换 1 座奖杯。</p>
         </div>
 
         <div class="medal-shelf" id="medalShelf"></div>
@@ -62,6 +53,10 @@
         </div>
 
         <div class="settings-form">
+          <div class="info-strip">
+            <span id="apiStatus" class="status-chip warning">未设置千问 API key，当前会使用本地题库</span>
+          </div>
+
           <label class="field">
             <span>API key</span>
             <input id="apiKeyInput" type="password" placeholder="请输入阿里千问 API key">
@@ -83,6 +78,15 @@
               <button id="settingsDifficultyDownButton" class="difficulty-btn" type="button">-</button>
               <span id="settingsDifficultyValue" class="difficulty-value">普通</span>
               <button id="settingsDifficultyUpButton" class="difficulty-btn" type="button">+</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <span>年级</span>
+            <div class="difficulty-control settings-difficulty">
+              <button id="gradeDownButton" class="difficulty-btn" type="button">-</button>
+              <span id="gradeValue" class="difficulty-value">3年级</span>
+              <button id="gradeUpButton" class="difficulty-btn" type="button">+</button>
             </div>
           </div>
 
@@ -152,7 +156,7 @@
             <strong id="finalStars">0</strong>
           </div>
           <div class="summary-value">
-            <span>新奖牌</span>
+            <span>奖牌总数</span>
             <strong id="earnedMedals">0</strong>
           </div>
         </div>

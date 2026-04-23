@@ -409,7 +409,7 @@ main {
 
 .answer-btn {
   text-align: left;
-  min-height: 88px;
+  min-height: 58px;
   font-size: 1.05rem;
   color: var(--ink);
   background: white;

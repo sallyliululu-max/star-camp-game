@@ -175,6 +175,8 @@ const state = {
   answeringLocked: false,
   audioContext: null,
   speechAudio: null,
+  speechCache: new Map(),
+  ttsPending: new Map(),
   settings: { ...defaultSettings },
   questionSource: "fallback",
   questionPool: {
@@ -255,6 +257,21 @@ function getGradeLabel(grade) {
 
 function getQuestionKey(question) {
   return `${question.type}__${question.prompt}__${question.answer}`;
+}
+
+function trimSpeechCache() {
+  if (state.speechCache.size <= 12) {
+    return;
+  }
+
+  const overflow = state.speechCache.size - 12;
+  const keys = state.speechCache.keys();
+  for (let i = 0; i < overflow; i += 1) {
+    const key = keys.next().value;
+    if (key) {
+      state.speechCache.delete(key);
+    }
+  }
 }
 
 function setSettingsMessage(text, type = "") {
@@ -572,33 +589,10 @@ async function speakWithTts(question) {
     return false;
   }
 
-  const response = await fetch(TTS_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${state.settings.apiKey}`
-    },
-    body: JSON.stringify({
-      model: TTS_MODEL,
-      input: {
-        text: buildQuestionSpeechText(question),
-        voice: TTS_VOICE,
-        format: "mp3",
-        sample_rate: 24000,
-        volume: 60,
-        rate: 0.95
-      }
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`TTS 请求失败：${response.status}`);
-  }
-
-  const data = await response.json();
-  const audioUrl = data?.output?.audio?.url;
+  const key = getQuestionKey(question);
+  let audioUrl = state.speechCache.get(key);
   if (!audioUrl) {
-    throw new Error("TTS 返回里没有音频地址。");
+    audioUrl = await prefetchTtsAudio(question);
   }
 
   stopSpeaking();
@@ -607,6 +601,63 @@ async function speakWithTts(question) {
   state.speechAudio = audio;
   await audio.play();
   return true;
+}
+
+async function prefetchTtsAudio(question) {
+  if (!question || !state.settings.apiKey) {
+    return null;
+  }
+
+  const key = getQuestionKey(question);
+  if (state.speechCache.has(key)) {
+    return state.speechCache.get(key);
+  }
+
+  if (state.ttsPending.has(key)) {
+    return state.ttsPending.get(key);
+  }
+
+  const pending = (async () => {
+    const response = await fetch(TTS_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.settings.apiKey}`
+      },
+      body: JSON.stringify({
+        model: TTS_MODEL,
+        input: {
+          text: buildQuestionSpeechText(question),
+          voice: TTS_VOICE,
+          format: "mp3",
+          sample_rate: 24000,
+          volume: 60,
+          rate: 0.95
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`TTS 请求失败：${response.status}`);
+    }
+
+    const data = await response.json();
+    const audioUrl = data?.output?.audio?.url;
+    if (!audioUrl) {
+      throw new Error("TTS 返回里没有音频地址。");
+    }
+
+    state.speechCache.set(key, audioUrl);
+    trimSpeechCache();
+    return audioUrl;
+  })();
+
+  state.ttsPending.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    state.ttsPending.delete(key);
+  }
 }
 
 async function speakQuestion(question) {
@@ -917,13 +968,18 @@ function renderQuestion() {
 
   renderStats();
   showQuestionCard();
+  prefetchTtsAudio(state.currentQuestion).catch(() => {});
   window.setTimeout(() => {
     speakQuestion(state.currentQuestion);
-  }, 120);
+  }, 40);
 
   if (state.currentQuestions.length <= 3) {
     ensureSessionQuestions(6);
   }
+
+  state.currentQuestions.slice(0, 2).forEach((question) => {
+    prefetchTtsAudio(question).catch(() => {});
+  });
 }
 
 function getAudioContext() {

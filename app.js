@@ -181,7 +181,8 @@ const state = {
   fillPoolPromise: null,
   usedQuestionKeys: new Set(),
   usedQuestionArchive: new Set(),
-  speechReady: false
+  speechReady: false,
+  audioReady: false
 };
 
 const els = {
@@ -490,6 +491,29 @@ function initSpeech() {
   } catch {
     return false;
   }
+}
+
+async function initAudio() {
+  const context = getAudioContext();
+  if (!context) {
+    return false;
+  }
+
+  try {
+    if (context.state === "suspended") {
+      await context.resume();
+    }
+    state.audioReady = context.state === "running";
+    return state.audioReady;
+  } catch {
+    state.audioReady = false;
+    return false;
+  }
+}
+
+async function unlockMedia() {
+  await initAudio();
+  initSpeech();
 }
 
 function pickChineseVoice() {
@@ -842,8 +866,8 @@ function playCorrectSound() {
   const context = getAudioContext();
   if (!context) return;
 
-  if (context.state === "suspended") {
-    context.resume().catch(() => {});
+  if (context.state !== "running") {
+    return;
   }
 
   const now = context.currentTime;
@@ -885,6 +909,7 @@ function lockAnswers(correctAnswer, clickedButton, isCorrect) {
 }
 
 async function moveToNextQuestion() {
+  await unlockMedia();
   stopSpeaking();
   state.currentQuestion = null;
   if (state.currentQuestions.length === 0) {
@@ -893,8 +918,8 @@ async function moveToNextQuestion() {
   renderQuestion();
 }
 
-function handleAnswer(selected, button) {
-  initSpeech();
+async function handleAnswer(selected, button) {
+  await unlockMedia();
   if (state.answeringLocked) return;
   state.answeringLocked = true;
 
@@ -922,7 +947,7 @@ function handleAnswer(selected, button) {
 }
 
 async function startRound() {
-  initSpeech();
+  await unlockMedia();
   state.sessionStars = 0;
   state.answeredCount = 0;
   state.currentQuestions = [];
@@ -1028,8 +1053,8 @@ els.backHomeButton.addEventListener("click", () => {
   stopSpeaking();
   switchScreen(els.homeScreen);
 });
-els.speakButton.addEventListener("click", () => {
-  initSpeech();
+els.speakButton.addEventListener("click", async () => {
+  await unlockMedia();
   speakQuestion(state.currentQuestion);
 });
 els.nextButton.addEventListener("click", moveToNextQuestion);

@@ -4,6 +4,9 @@ const QUESTION_POOL_KEY = "star-camp-question-pool";
 const USED_QUESTION_KEYS = "star-camp-used-question-keys";
 const QUESTIONS_PER_BATCH = 8;
 const QUESTION_POOL_TARGET = 50;
+const TTS_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer";
+const TTS_MODEL = "cosyvoice-v3-flash";
+const TTS_VOICE = "longanyang";
 const MIN_GRADE = 1;
 const MAX_GRADE = 6;
 const DIFFICULTY_LEVELS = ["easy", "medium", "hard"];
@@ -171,6 +174,7 @@ const state = {
   currentQuestions: [],
   answeringLocked: false,
   audioContext: null,
+  speechAudio: null,
   settings: { ...defaultSettings },
   questionSource: "fallback",
   questionPool: {
@@ -473,6 +477,11 @@ function showQuestionCard() {
 }
 
 function stopSpeaking() {
+  if (state.speechAudio) {
+    state.speechAudio.pause();
+    state.speechAudio.currentTime = 0;
+    state.speechAudio = null;
+  }
   if ("speechSynthesis" in window) {
     window.speechSynthesis.cancel();
   }
@@ -533,11 +542,9 @@ function buildQuestionSpeechText(question) {
   return `${question.type}。${question.prompt}。${optionsText}。`;
 }
 
-function speakQuestion(question) {
+async function speakWithBrowser(question) {
   if (!("speechSynthesis" in window) || !question) {
-    els.feedback.textContent = "当前浏览器不支持朗读。";
-    els.feedback.className = "feedback error";
-    return;
+    return false;
   }
 
   initSpeech();
@@ -552,11 +559,77 @@ function speakQuestion(question) {
   if (voice) {
     utterance.voice = voice;
   }
-  utterance.onerror = () => {
-    els.feedback.textContent = "朗读没有成功，可以再点一次“再读一遍”。";
+
+  return new Promise((resolve) => {
+    utterance.onend = () => resolve(true);
+    utterance.onerror = () => resolve(false);
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
+async function speakWithTts(question) {
+  if (!question || !state.settings.apiKey) {
+    return false;
+  }
+
+  const response = await fetch(TTS_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${state.settings.apiKey}`
+    },
+    body: JSON.stringify({
+      model: TTS_MODEL,
+      input: {
+        text: buildQuestionSpeechText(question),
+        voice: TTS_VOICE,
+        format: "mp3",
+        sample_rate: 24000,
+        volume: 60,
+        rate: 0.95
+      }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`TTS 请求失败：${response.status}`);
+  }
+
+  const data = await response.json();
+  const audioUrl = data?.output?.audio?.url;
+  if (!audioUrl) {
+    throw new Error("TTS 返回里没有音频地址。");
+  }
+
+  stopSpeaking();
+  const audio = new Audio(audioUrl);
+  audio.preload = "auto";
+  state.speechAudio = audio;
+  await audio.play();
+  return true;
+}
+
+async function speakQuestion(question) {
+  if (!question) {
+    return;
+  }
+
+  try {
+    if (state.settings.apiKey) {
+      const played = await speakWithTts(question);
+      if (played) {
+        return;
+      }
+    }
+  } catch (error) {
+    console.error(error);
+  }
+
+  const browserPlayed = await speakWithBrowser(question);
+  if (!browserPlayed) {
+    els.feedback.textContent = "朗读没有成功，建议检查手机音量，或稍后再点一次“再读一遍”。";
     els.feedback.className = "feedback error";
-  };
-  window.speechSynthesis.speak(utterance);
+  }
 }
 
 function createFallbackBatch(level) {
@@ -844,7 +917,9 @@ function renderQuestion() {
 
   renderStats();
   showQuestionCard();
-  window.setTimeout(() => speakQuestion(state.currentQuestion), 120);
+  window.setTimeout(() => {
+    speakQuestion(state.currentQuestion);
+  }, 120);
 
   if (state.currentQuestions.length <= 3) {
     ensureSessionQuestions(6);

@@ -180,7 +180,8 @@ const state = {
   },
   fillPoolPromise: null,
   usedQuestionKeys: new Set(),
-  usedQuestionArchive: new Set()
+  usedQuestionArchive: new Set(),
+  speechReady: false
 };
 
 const els = {
@@ -476,6 +477,21 @@ function stopSpeaking() {
   }
 }
 
+function initSpeech() {
+  if (!("speechSynthesis" in window)) {
+    return false;
+  }
+
+  try {
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.resume();
+    state.speechReady = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function pickChineseVoice() {
   if (!("speechSynthesis" in window)) {
     return null;
@@ -495,19 +511,27 @@ function buildQuestionSpeechText(question) {
 
 function speakQuestion(question) {
   if (!("speechSynthesis" in window) || !question) {
+    els.feedback.textContent = "当前浏览器不支持朗读。";
+    els.feedback.className = "feedback error";
     return;
   }
 
+  initSpeech();
   stopSpeaking();
   window.speechSynthesis.resume();
   const utterance = new SpeechSynthesisUtterance(buildQuestionSpeechText(question));
   utterance.lang = "zh-CN";
   utterance.rate = 0.95;
   utterance.pitch = 1.05;
+  utterance.volume = 1;
   const voice = pickChineseVoice();
   if (voice) {
     utterance.voice = voice;
   }
+  utterance.onerror = () => {
+    els.feedback.textContent = "朗读没有成功，可以再点一次“再读一遍”。";
+    els.feedback.className = "feedback error";
+  };
   window.speechSynthesis.speak(utterance);
 }
 
@@ -870,6 +894,7 @@ async function moveToNextQuestion() {
 }
 
 function handleAnswer(selected, button) {
+  initSpeech();
   if (state.answeringLocked) return;
   state.answeringLocked = true;
 
@@ -897,6 +922,7 @@ function handleAnswer(selected, button) {
 }
 
 async function startRound() {
+  initSpeech();
   state.sessionStars = 0;
   state.answeredCount = 0;
   state.currentQuestions = [];
@@ -1002,7 +1028,10 @@ els.backHomeButton.addEventListener("click", () => {
   stopSpeaking();
   switchScreen(els.homeScreen);
 });
-els.speakButton.addEventListener("click", () => speakQuestion(state.currentQuestion));
+els.speakButton.addEventListener("click", () => {
+  initSpeech();
+  speakQuestion(state.currentQuestion);
+});
 els.nextButton.addEventListener("click", moveToNextQuestion);
 els.endButton.addEventListener("click", finishRound);
 els.resetButton.addEventListener("click", resetProgress);
@@ -1025,3 +1054,9 @@ renderStats();
 renderMedals();
 renderSettingsStatus();
 fillQuestionPoolInBackground();
+
+if ("speechSynthesis" in window) {
+  window.speechSynthesis.onvoiceschanged = () => {
+    initSpeech();
+  };
+}

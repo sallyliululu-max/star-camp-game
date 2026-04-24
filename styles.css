@@ -355,10 +355,7 @@ main {
 }
 
 .loading-card {
-  display: grid;
-  place-items: center;
-  text-align: center;
-  gap: 14px;
+  display: none;
 }
 
 .spinner {

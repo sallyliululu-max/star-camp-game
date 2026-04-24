@@ -7,6 +7,7 @@ const QUESTION_POOL_TARGET = 50;
 const TTS_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer";
 const TTS_MODEL = "cosyvoice-v3-flash";
 const TTS_VOICE = "longanyang";
+const FIXED_REGION = "福建厦门";
 const MIN_GRADE = 1;
 const MAX_GRADE = 6;
 const DIFFICULTY_LEVELS = ["easy", "medium", "hard"];
@@ -59,6 +60,13 @@ const fallbackQuestionBanks = {
       options: ["Hello!", "Good night!", "Bye!", "Thank you!"],
       answer: "Hello!",
       explanation: "别人打招呼说 Hello，你也可以回 Hello。"
+    },
+    {
+      type: "知识问答",
+      prompt: "晴天抬头看，白天最亮、最温暖的那个大圆球是什么？",
+      options: ["月亮", "太阳", "星星", "地球"],
+      answer: "太阳",
+      explanation: "白天给我们光和热的，就是太阳。"
     }
   ],
   medium: [
@@ -103,6 +111,20 @@ const fallbackQuestionBanks = {
       options: ["I", "am", "Tom", "这句话没有名字"],
       answer: "Tom",
       explanation: "Tom 是名字，I am 的意思是“我是”。"
+    },
+    {
+      type: "知识问答",
+      prompt: "夜空里常常会发光、会变化圆缺的天体，最常见的是哪一个？",
+      options: ["月亮", "火山", "彩虹", "云朵"],
+      answer: "月亮",
+      explanation: "晚上最常看到会变化圆缺的，就是月亮。"
+    },
+    {
+      type: "知识问答",
+      prompt: "“谁知盘中餐，粒粒皆辛苦”这句诗想提醒我们什么？",
+      options: ["要爱惜粮食", "要多吃水果", "要早点睡觉", "要去旅行"],
+      answer: "要爱惜粮食",
+      explanation: "这句诗告诉我们粮食来得不容易，要珍惜。"
     }
   ],
   hard: [
@@ -147,6 +169,20 @@ const fallbackQuestionBanks = {
       options: ["老师", "朋友", "姐姐", "同桌"],
       answer: "朋友",
       explanation: "friend 表示朋友。"
+    },
+    {
+      type: "知识问答",
+      prompt: "地球上白天和黑夜会不断交替，最主要是因为什么？",
+      options: ["地球在自转", "太阳在休息", "月亮在发光", "云在移动"],
+      answer: "地球在自转",
+      explanation: "地球会自己转动，所以我们会经历白天和黑夜。"
+    },
+    {
+      type: "知识问答",
+      prompt: "“飞流直下三千尺，疑是银河落九天”描写的最像哪种自然景象？",
+      options: ["瀑布", "沙漠", "稻田", "草原"],
+      answer: "瀑布",
+      explanation: "这句诗写的是水从高处直落，很像壮观的瀑布。"
     }
   ]
 };
@@ -161,7 +197,8 @@ const defaultSettings = {
   model: "qwen-plus",
   endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
   difficulty: "medium",
-  grade: 3
+  grade: 3,
+  region: FIXED_REGION
 };
 
 const state = {
@@ -324,7 +361,8 @@ function loadSettings() {
       model: typeof parsed.model === "string" && parsed.model.trim() ? parsed.model.trim() : defaultSettings.model,
       endpoint: typeof parsed.endpoint === "string" && parsed.endpoint.trim() ? parsed.endpoint.trim() : defaultSettings.endpoint,
       difficulty,
-      grade: Number.isInteger(grade) ? Math.min(MAX_GRADE, Math.max(MIN_GRADE, grade)) : defaultSettings.grade
+      grade: Number.isInteger(grade) ? Math.min(MAX_GRADE, Math.max(MIN_GRADE, grade)) : defaultSettings.grade,
+      region: FIXED_REGION
     };
   } catch {
     state.settings = { ...defaultSettings };
@@ -428,11 +466,12 @@ function getPoolCount(level) {
 function renderSettingsStatus() {
   const difficultyText = `当前难度：${getDifficultyLabel(state.settings.difficulty)}`;
   const gradeText = `目标：${getGradeLabel(state.settings.grade)}`;
+  const regionText = `地域：${FIXED_REGION}`;
   const poolText = `已缓存 ${getPoolCount(state.settings.difficulty)} 题`;
   if (state.settings.apiKey) {
-    setApiStatus(`已设置千问 API key，开始时会直接从缓存题库出题。${difficultyText}，${gradeText}，${poolText}`, "success");
+    setApiStatus(`已设置千问 API key，开始时会直接从缓存题库出题。${difficultyText}，${gradeText}，${regionText}，${poolText}`, "success");
   } else {
-    setApiStatus(`未设置千问 API key，当前会使用本地题库。${difficultyText}，${gradeText}，${poolText}`, "warning");
+    setApiStatus(`未设置千问 API key，当前会使用本地题库。${difficultyText}，${gradeText}，${regionText}，${poolText}`, "warning");
   }
 }
 
@@ -553,10 +592,7 @@ function pickChineseVoice() {
 
 function buildQuestionSpeechText(question) {
   if (!question) return "";
-  const optionsText = question.options
-    .map((option, index) => `选项${index + 1}，${option}`)
-    .join("。");
-  return `${question.type}。${question.prompt}。${optionsText}。`;
+  return `${question.type}。${question.prompt}。`;
 }
 
 async function speakWithBrowser(question) {
@@ -766,19 +802,25 @@ function getGradePrompt(grade) {
   return `目标学生为小学${grade}年级。英语词汇绝不能超过这个年级的常见教材范围；数学思维和语文阅读按这个年级的较高要求来设计，但仍要让孩子能通过思考完成。`;
 }
 
+function getRegionPrompt(region) {
+  return `请参考${region}常见的小学课程内容和表达习惯来设计语文、数学、英语题目；如果存在版本差异，请优先贴近该地域常见教材。`;
+}
+
 async function generateQuestionsFromQwen(level) {
   const prompt = [
     `请以 JSON 格式返回 ${QUESTIONS_PER_BATCH} 道适合中国 6-12 岁小学生的选择题。`,
-    "题目要混合数学思维、语文阅读、英语能力，不要让用户先选学科。",
+    "题目要混合数学思维、语文阅读、英语能力、知识问答，不要让用户先选学科。",
     getDifficultyPrompt(level),
     getGradePrompt(state.settings.grade),
+    getRegionPrompt(state.settings.region),
     getEnglishVocabPrompt(state.settings.grade),
+    "知识问答可以包含该年级及以下的有趣科学知识、天文地理、生活常识、古诗词名句理解，但不要超纲。",
     "整套题必须有趣味、像小游戏里的挑战，不要像学校作业或试卷。",
     "优先使用小侦探、动物派对、魔法商店、太空探险、寻宝、校园趣事这类轻剧情场景。",
     "题干要短小、有画面感、带一点俏皮感，但不能幼稚过头。",
     "不要使用“请计算”“请阅读短文并回答”“下列说法正确的是”这种作业口吻。",
     "每题必须有 type、prompt、options、answer、explanation 五个字段。",
-    'type 只能是“数学思维”“语文阅读”“英语能力”之一。',
+    'type 只能是“数学思维”“语文阅读”“英语能力”“知识问答”之一。',
     "options 必须恰好 4 个，answer 必须与其中一个选项完全一致。",
     "prompt 和 explanation 都要简短、友好、儿童化，不要超纲，不要恐吓。",
     "explanation 要像鼓励式提示，帮助孩子明白为什么对，不要像老师批改。",
@@ -969,10 +1011,6 @@ function renderQuestion() {
   renderStats();
   showQuestionCard();
   prefetchTtsAudio(state.currentQuestion).catch(() => {});
-  window.setTimeout(() => {
-    speakQuestion(state.currentQuestion);
-  }, 40);
-
   if (state.currentQuestions.length <= 3) {
     ensureSessionQuestions(6);
   }
@@ -1153,6 +1191,7 @@ function saveSettingsFromForm() {
   state.settings.apiKey = els.apiKeyInput.value.trim();
   state.settings.model = els.modelInput.value.trim() || defaultSettings.model;
   state.settings.endpoint = els.endpointInput.value.trim() || defaultSettings.endpoint;
+  state.settings.region = FIXED_REGION;
   saveSettings();
   renderDifficulty();
   renderSettingsStatus();

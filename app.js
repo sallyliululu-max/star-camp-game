@@ -10,6 +10,16 @@ const TTS_VOICE = "longanyang";
 const FIXED_REGION = "福建厦门";
 const MIN_GRADE = 1;
 const MAX_GRADE = 6;
+const BATCH_TYPE_PLAN = [
+  "数学思维",
+  "数学思维",
+  "语文阅读",
+  "语文阅读",
+  "英语能力",
+  "英语能力",
+  "知识问答",
+  "知识问答"
+];
 const DIFFICULTY_LEVELS = ["easy", "medium", "hard"];
 const DIFFICULTY_LABELS = {
   easy: "简单",
@@ -760,6 +770,35 @@ function dedupeQuestions(questions) {
   });
 }
 
+function sortQuestionsByPlan(questions) {
+  const buckets = {
+    "数学思维": [],
+    "语文阅读": [],
+    "英语能力": [],
+    "知识问答": []
+  };
+
+  questions.forEach((question) => {
+    if (buckets[question.type]) {
+      buckets[question.type].push(question);
+    }
+  });
+
+  const result = [];
+  BATCH_TYPE_PLAN.forEach((type) => {
+    const item = buckets[type]?.shift();
+    if (item) {
+      result.push(item);
+    }
+  });
+
+  Object.values(buckets).forEach((items) => {
+    result.push(...items);
+  });
+
+  return result.slice(0, QUESTIONS_PER_BATCH);
+}
+
 function extractJson(text) {
   const cleaned = text.trim()
     .replace(/^```json/i, "")
@@ -806,14 +845,37 @@ function getRegionPrompt(region) {
   return `请参考${region}常见的小学课程内容和表达习惯来设计语文、数学、英语题目；如果存在版本差异，请优先贴近该地域常见教材。`;
 }
 
+function getDistributionPrompt(grade) {
+  if (grade <= 2) {
+    return [
+      "同一批题里请尽量分散题型，不要让两三道题只是在换词重复同一种问法。",
+      "数学要轮换覆盖：数数、大小比较、简单加减、找规律、图形认识、生活应用。",
+      "语文要轮换覆盖：词义理解、句子信息提取、顺序判断、古诗词基础理解、生活表达。",
+      "英语要轮换覆盖：问候、数字、颜色、动物、家庭、文具、食物、简单课堂用语。",
+      "知识问答要轮换覆盖：自然常识、天文地理、身体与生活、节日习俗、古诗词名句理解。",
+      "避免在一批题里反复出现 apple、red、banana、cat 这类同一个词。"
+    ].join("\n");
+  }
+
+  return [
+    "同一批题里请尽量分散题型，不要让多道题只是表面换词、实际考点相同。",
+    "数学要轮换覆盖：计算、规律、比较、图形、推理、应用场景。",
+    "语文要轮换覆盖：词义、句意、阅读理解、信息提取、古诗词、表达判断。",
+    "英语要轮换覆盖：词汇、句型理解、情景表达、数字颜色、人物动物、日常物品。",
+    "知识问答要轮换覆盖：科学常识、天文地理、传统文化、古诗词理解、生活常识。"
+  ].join("\n");
+}
+
 async function generateQuestionsFromQwen(level) {
   const prompt = [
     `请以 JSON 格式返回 ${QUESTIONS_PER_BATCH} 道适合中国 6-12 岁小学生的选择题。`,
     "题目要混合数学思维、语文阅读、英语能力、知识问答，不要让用户先选学科。",
+    "这 8 道题请尽量按以下数量分布：数学思维 2 道，语文阅读 2 道，英语能力 2 道，知识问答 2 道。",
     getDifficultyPrompt(level),
     getGradePrompt(state.settings.grade),
     getRegionPrompt(state.settings.region),
     getEnglishVocabPrompt(state.settings.grade),
+    getDistributionPrompt(state.settings.grade),
     "知识问答可以包含该年级及以下的有趣科学知识、天文地理、生活常识、古诗词名句理解，但不要超纲。",
     "整套题必须有趣味、像小游戏里的挑战，不要像学校作业或试卷。",
     "优先使用小侦探、动物派对、魔法商店、太空探险、寻宝、校园趣事这类轻剧情场景。",
@@ -826,6 +888,7 @@ async function generateQuestionsFromQwen(level) {
     "explanation 要像鼓励式提示，帮助孩子明白为什么对，不要像老师批改。",
     "错误选项要合理但不能太离谱，避免一眼看穿。",
     "不要出重复题，不要只考死记硬背，尽量让孩子像在闯关。",
+    "如果两道题考的是同一知识点，请确保问法和场景明显不同；如果做不到，请换别的知识点。",
     "请只输出一个 JSON 对象，格式为：",
     '{"questions":[{"type":"","prompt":"","options":["","","",""],"answer":"","explanation":""}]}'
   ].join("\n");
@@ -868,12 +931,13 @@ async function generateQuestionsFromQwen(level) {
   const list = Array.isArray(parsed.questions) ? parsed.questions : [];
   const normalized = list.map(sanitizeQuestion).filter(Boolean);
   const deduped = dedupeQuestions(normalized);
+  const typed = sortQuestionsByPlan(deduped);
 
-  if (deduped.length < QUESTIONS_PER_BATCH) {
+  if (typed.length < QUESTIONS_PER_BATCH) {
     throw new Error("模型返回的合格题目数量不足。");
   }
 
-  return deduped.slice(0, QUESTIONS_PER_BATCH);
+  return typed.slice(0, QUESTIONS_PER_BATCH);
 }
 
 async function fetchBatchForLevel(level) {
